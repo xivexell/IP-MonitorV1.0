@@ -10,6 +10,10 @@ Desplegar la aplicación de monitoreo de red con base de datos MySQL en un servi
 - Dominio o IP pública (opcional para HTTPS)
 - Mínimo 2GB RAM y 20GB espacio en disco
 
+**Datos del Servidor:**
+- IP del Servidor: `10.0.1.9`
+- Repositorio GitHub: `https://github.com/xivexell/IP-MonitorV1.0`
+
 ---
 
 ## 🚀 PASO 1: Preparación del Servidor
@@ -17,7 +21,7 @@ Desplegar la aplicación de monitoreo de red con base de datos MySQL en un servi
 ### 1.1 Actualizar el Sistema
 ```bash
 # Conectarse al servidor via SSH
-ssh usuario@tu-servidor.com
+ssh usuario@10.0.1.9
 
 # Actualizar la lista de paquetes
 sudo apt update
@@ -227,7 +231,7 @@ sudo nano /etc/nginx/sites-available/network-monitor
 # Configuración para aplicación de monitoreo de red
 server {
     listen 80;
-    server_name tu-dominio.com www.tu-dominio.com;  # Cambiar por tu dominio o IP
+    server_name 10.0.1.9;  # IP del servidor
     
     # Configuración de logs
     access_log /var/log/nginx/network-monitor.access.log;
@@ -344,30 +348,28 @@ sudo chown -R $USER:$USER /var/www/network-monitor
 cd /var/www/network-monitor
 ```
 
-### 5.2 Clonar o Subir la Aplicación
-
-**Opción A: Si tienes Git configurado**
+### 5.2 Clonar la Aplicación desde GitHub
 ```bash
-# Clonar desde repositorio (si aplica)
-git clone https://github.com/tu-usuario/network-monitor.git .
-```
+# Clonar el repositorio desde GitHub
+git clone https://github.com/xivexell/IP-MonitorV1.0.git .
 
-**Opción B: Subir archivos manualmente**
-```bash
-# En tu máquina local, comprimir la aplicación
-# zip -r network-monitor.zip . -x node_modules/\* .git/\*
+# Verificar que se clonó correctamente
+ls -la
 
-# Subir al servidor usando SCP
-# scp network-monitor.zip usuario@tu-servidor.com:/var/www/network-monitor/
-
-# En el servidor, descomprimir
-unzip network-monitor.zip
-rm network-monitor.zip
+# Debería mostrar los archivos del proyecto:
+# - package.json
+# - server/
+# - src/
+# - README.md
+# - etc.
 ```
 
 ### 5.3 Configurar Variables de Entorno
 ```bash
-# Crear archivo de variables de entorno
+# Copiar el archivo de ejemplo
+cp .env.example .env
+
+# Editar el archivo de variables de entorno
 nano .env
 ```
 
@@ -385,7 +387,7 @@ PORT=3000
 NODE_ENV=production
 
 # URL del Frontend (para CORS en producción)
-FRONTEND_URL=http://tu-dominio.com
+FRONTEND_URL=http://10.0.1.9
 
 # Configuración de Seguridad
 JWT_SECRET=tu_clave_secreta_jwt_muy_segura_cambiar_en_produccion
@@ -546,7 +548,7 @@ pm2 startup
 
 ---
 
-## 🔒 PASO 8: Configuración de HTTPS con Let's Encrypt
+## 🔒 PASO 8: Configuración de HTTPS con Let's Encrypt (Opcional)
 
 ### 8.1 Instalar Certbot
 ```bash
@@ -560,21 +562,13 @@ sudo snap install --classic certbot
 sudo ln -s /snap/bin/certbot /usr/bin/certbot
 ```
 
-### 8.2 Obtener Certificado SSL
+### 8.2 Obtener Certificado SSL (Solo si tienes dominio)
 ```bash
-# Obtener certificado (reemplazar con tu dominio)
-sudo certbot --nginx -d tu-dominio.com -d www.tu-dominio.com
+# Si tienes un dominio apuntando a 10.0.1.9, puedes obtener certificado SSL
+# sudo certbot --nginx -d tu-dominio.com
 
-# Seguir las instrucciones en pantalla
-# Certbot configurará automáticamente Nginx para HTTPS
-```
-
-### 8.3 Configurar Renovación Automática
-```bash
-# Probar renovación automática
-sudo certbot renew --dry-run
-
-# El cron job se configura automáticamente
+# Para IP directa, HTTPS no es necesario en red interna
+# La aplicación funcionará perfectamente con HTTP en http://10.0.1.9
 ```
 
 ---
@@ -681,11 +675,11 @@ pm2 logs network-monitor --lines 50
 mysql -u network_monitor -p network_monitor_db -e "SELECT COUNT(*) FROM settings;"
 
 # ✅ Verificar acceso desde navegador
-# Abrir http://tu-dominio.com o http://tu-ip-publica
+# Abrir http://10.0.1.9 en tu navegador
 ```
 
 ### 10.2 Pruebas de Funcionalidad
-1. **Acceder a la aplicación** desde un navegador web
+1. **Acceder a la aplicación** desde un navegador web en `http://10.0.1.9`
 2. **Agregar un dispositivo** para monitorear
 3. **Verificar que los datos se guardan** en MySQL:
    ```bash
@@ -793,8 +787,8 @@ sudo cp -r /var/www/network-monitor /var/backups/network-monitor-$(date +%Y%m%d-
 echo "💾 Creando backup de base de datos..."
 mysqldump -u network_monitor -p$DB_PASSWORD network_monitor_db > /var/backups/db_backup_$(date +%Y%m%d-%H%M%S).sql
 
-# Actualizar código (si usas Git)
-echo "📥 Descargando actualizaciones..."
+# Actualizar código desde GitHub
+echo "📥 Descargando actualizaciones desde GitHub..."
 git pull origin main
 
 # Instalar nuevas dependencias
@@ -815,8 +809,8 @@ sleep 5
 pm2 status
 
 echo "✅ Actualización completada!"
-echo "🌐 La aplicación está disponible en: http://tu-dominio.com"
-echo "📊 Health check: http://tu-dominio.com/api/health"
+echo "🌐 La aplicación está disponible en: http://10.0.1.9"
+echo "📊 Health check: http://10.0.1.9/api/health"
 ```
 
 ### 12.2 Hacer el Script Ejecutable
@@ -951,7 +945,9 @@ mysql -u network_monitor -p network_monitor_db -e "OPTIMIZE TABLE devices, ping_
 
 **Desarrollado por:** Ing. Jaime Ballesteros S.  
 **Cargo:** Jefe Div. Infraestructura Tecnológica  
-**Versión:** 1.0.0 con MySQL
+**Versión:** 1.0.0 con MySQL  
+**Repositorio:** https://github.com/xivexell/IP-MonitorV1.0  
+**Servidor:** 10.0.1.9
 
 ---
 
@@ -961,7 +957,7 @@ mysql -u network_monitor -p network_monitor_db -e "OPTIMIZE TABLE devices, ping_
 1. **Cambiar contraseñas por defecto** en `.env`
 2. **Configurar firewall** correctamente
 3. **Mantener MySQL actualizado**
-4. **Usar HTTPS** en producción
+4. **Usar HTTPS** si tienes dominio
 5. **Configurar backups automáticos**
 
 ### 📊 Rendimiento
@@ -983,6 +979,11 @@ mysql -u network_monitor -p network_monitor_db -e "OPTIMIZE TABLE devices, ping_
   - Load balancer con múltiples instancias
   - Optimización de base de datos
 
+### 🌐 Acceso a la Aplicación
+- **URL Principal:** http://10.0.1.9
+- **API Health Check:** http://10.0.1.9/api/health
+- **Repositorio GitHub:** https://github.com/xivexell/IP-MonitorV1.0
+
 ---
 
 ¡Tu aplicación de monitoreo de red con MySQL ya está lista para producción empresarial! 🎉
@@ -994,3 +995,35 @@ mysql -u network_monitor -p network_monitor_db -e "OPTIMIZE TABLE devices, ping_
 3. **Configurar cluster MySQL** para alta disponibilidad
 4. **Implementar autenticación de usuarios**
 5. **Agregar dashboard de administración**
+
+## 📋 Resumen de URLs y Comandos Importantes
+
+### 🔗 URLs de Acceso
+- **Aplicación Principal:** http://10.0.1.9
+- **Health Check:** http://10.0.1.9/api/health
+
+### 📦 Repositorio
+- **GitHub:** https://github.com/xivexell/IP-MonitorV1.0
+- **Clone:** `git clone https://github.com/xivexell/IP-MonitorV1.0.git`
+
+### 🖥️ Servidor
+- **IP:** 10.0.1.9
+- **SSH:** `ssh usuario@10.0.1.9`
+
+### ⚡ Comandos Rápidos
+```bash
+# Ver estado de la aplicación
+pm2 status
+
+# Ver logs en tiempo real
+pm2 logs network-monitor
+
+# Reiniciar aplicación
+pm2 restart network-monitor
+
+# Verificar MySQL
+mysql -u network_monitor -p network_monitor_db
+
+# Actualizar desde GitHub
+cd /var/www/network-monitor && git pull origin main
+```
