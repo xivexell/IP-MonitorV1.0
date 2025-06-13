@@ -1,12 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AppSettings, AlertSettings, ThemeMode } from '../types';
+import { settingsAPI } from '../services/api';
 
 interface SettingsContextProps {
   settings: AppSettings;
-  updateSettings: (newSettings: Partial<AppSettings>) => void;
-  updateAlertSettings: (newAlertSettings: Partial<AlertSettings>) => void;
+  updateSettings: (newSettings: Partial<AppSettings>) => Promise<void>;
+  updateAlertSettings: (newAlertSettings: Partial<AlertSettings>) => Promise<void>;
   toggleTheme: () => void;
   updateLogo: (file: File) => void;
+  isLoading: boolean;
+  error: string | null;
 }
 
 const defaultAlertSettings: AlertSettings = {
@@ -54,29 +57,12 @@ interface SettingsProviderProps {
 
 export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) => {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const savedSettings = localStorage.getItem('networkMonitor_settings');
-    if (savedSettings) {
-      try {
-        const parsedSettings = JSON.parse(savedSettings);
-        // Ensure companyName and dashboardSubtitle exist for backward compatibility
-        if (!parsedSettings.companyName) {
-          parsedSettings.companyName = 'Mi Empresa';
-        }
-        if (!parsedSettings.dashboardSubtitle) {
-          parsedSettings.dashboardSubtitle = 'Monitoree sus dispositivos de red en tiempo real';
-        }
-        setSettings(parsedSettings);
-      } catch (error) {
-        console.error('Error al cargar la configuración:', error);
-      }
-    }
+    loadSettings();
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem('networkMonitor_settings', JSON.stringify(settings));
-  }, [settings]);
 
   useEffect(() => {
     if (settings.theme === 'dark') {
@@ -86,39 +72,91 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     }
   }, [settings.theme]);
 
-  const updateSettings = (newSettings: Partial<AppSettings>) => {
-    setSettings(prev => ({
-      ...prev,
-      ...newSettings
-    }));
+  const loadSettings = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const settingsData = await settingsAPI.getAll();
+      setSettings(settingsData);
+    } catch (err) {
+      console.error('Error cargando configuraciones:', err);
+      setError(err instanceof Error ? err.message : 'Error cargando configuraciones');
+      
+      // Fallback a localStorage si la API falla
+      const savedSettings = localStorage.getItem('networkMonitor_settings');
+      if (savedSettings) {
+        try {
+          const parsedSettings = JSON.parse(savedSettings);
+          if (!parsedSettings.companyName) {
+            parsedSettings.companyName = 'Mi Empresa';
+          }
+          if (!parsedSettings.dashboardSubtitle) {
+            parsedSettings.dashboardSubtitle = 'Monitoree sus dispositivos de red en tiempo real';
+          }
+          setSettings(parsedSettings);
+        } catch (parseError) {
+          console.error('Error parseando configuraciones guardadas:', parseError);
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const updateAlertSettings = (newAlertSettings: Partial<AlertSettings>) => {
-    setSettings(prev => ({
-      ...prev,
+  const updateSettings = async (newSettings: Partial<AppSettings>) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const updatedSettings = { ...settings, ...newSettings };
+      await settingsAPI.update(updatedSettings);
+      setSettings(updatedSettings);
+      
+      // También guardar en localStorage como backup
+      localStorage.setItem('networkMonitor_settings', JSON.stringify(updatedSettings));
+    } catch (err) {
+      console.error('Error actualizando configuraciones:', err);
+      setError(err instanceof Error ? err.message : 'Error actualizando configuraciones');
+      
+      // Fallback: actualizar solo localmente
+      const updatedSettings = { ...settings, ...newSettings };
+      setSettings(updatedSettings);
+      localStorage.setItem('networkMonitor_settings', JSON.stringify(updatedSettings));
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const updateAlertSettings = async (newAlertSettings: Partial<AlertSettings>) => {
+    const updatedSettings = {
+      ...settings,
       alerts: {
-        ...prev.alerts,
+        ...settings.alerts,
         ...newAlertSettings
       }
-    }));
+    };
+    
+    await updateSettings(updatedSettings);
   };
 
-  const toggleTheme = () => {
-    setSettings(prev => ({
-      ...prev,
-      theme: prev.theme === 'light' ? 'dark' : 'light'
-    }));
+  const toggleTheme = async () => {
+    const newTheme = settings.theme === 'light' ? 'dark' : 'light';
+    await updateSettings({ theme: newTheme });
   };
 
   const updateLogo = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       if (e.target?.result) {
-        setSettings(prev => ({
-          ...prev,
-          logoUrl: e.target.result as string,
-          logoFile: file
-        }));
+        try {
+          await updateSettings({
+            logoUrl: e.target.result as string,
+            logoFile: file
+          });
+        } catch (err) {
+          console.error('Error actualizando logo:', err);
+        }
       }
     };
     reader.readAsDataURL(file);
@@ -130,7 +168,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
       updateSettings,
       updateAlertSettings,
       toggleTheme,
-      updateLogo
+      updateLogo,
+      isLoading,
+      error
     }}>
       {children}
     </SettingsContext.Provider>
