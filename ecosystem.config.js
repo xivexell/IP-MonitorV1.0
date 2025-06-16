@@ -6,12 +6,12 @@ module.exports = {
     exec_mode: 'fork',
     env: {
       NODE_ENV: 'production',
-      PORT: 80,
+      PORT: 3000,
       HOST: '0.0.0.0'
     },
     env_production: {
       NODE_ENV: 'production',
-      PORT: 80,
+      PORT: 3000,
       HOST: '0.0.0.0'
     },
     error_file: '/var/log/pm2/network-monitor-error.log',
