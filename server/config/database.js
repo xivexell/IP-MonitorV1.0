@@ -1,4 +1,5 @@
-import mysql from 'mysql2/promise';
+import sqlite3 from 'sqlite3';
+import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -6,104 +7,147 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Configuración de la base de datos
-const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || 'network_monitor',
-  password: process.env.DB_PASSWORD || 'secure_password_2024',
-  database: process.env.DB_NAME || 'network_monitor_db',
-  charset: 'utf8mb4',
-  timezone: '+00:00',
-  acquireTimeout: 60000,
-  timeout: 60000,
-  reconnect: true
-};
+// Configuración de la base de datos SQLite
+const dbPath = path.join(process.cwd(), 'data', 'network_monitor.db');
 
-// Pool de conexiones
-let pool;
+let db;
 
-export function createPool() {
-  if (!pool) {
-    pool = mysql.createPool({
-      ...dbConfig,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-      acquireTimeout: 60000,
-      timeout: 60000,
-      reconnect: true
-    });
-  }
-  return pool;
+// Función para crear la conexión SQLite
+export function createDatabase() {
+  return new Promise((resolve, reject) => {
+    // Crear directorio data si no existe
+    const dataDir = path.dirname(dbPath);
+    fs.mkdir(dataDir, { recursive: true }).then(() => {
+      db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          console.error('❌ Error conectando a SQLite:', err);
+          reject(err);
+        } else {
+          console.log('✅ Conectado a SQLite database');
+          // Habilitar foreign keys
+          db.run('PRAGMA foreign_keys = ON');
+          resolve(db);
+        }
+      });
+    }).catch(reject);
+  });
 }
 
-export function getPool() {
-  if (!pool) {
-    pool = createPool();
+export function getDatabase() {
+  if (!db) {
+    throw new Error('Database not initialized. Call createDatabase() first.');
   }
-  return pool;
+  return db;
 }
 
 // Función para ejecutar consultas
 export async function executeQuery(query, params = []) {
-  const connection = getPool();
-  try {
-    const [results] = await connection.execute(query, params);
-    return results;
-  } catch (error) {
-    console.error('Error ejecutando consulta:', error);
-    throw error;
-  }
+  return new Promise((resolve, reject) => {
+    const database = getDatabase();
+    
+    if (query.trim().toUpperCase().startsWith('SELECT')) {
+      database.all(query, params, (err, rows) => {
+        if (err) {
+          console.error('Error ejecutando consulta SELECT:', err);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    } else {
+      database.run(query, params, function(err) {
+        if (err) {
+          console.error('Error ejecutando consulta:', err);
+          reject(err);
+        } else {
+          resolve({
+            insertId: this.lastID,
+            changes: this.changes
+          });
+        }
+      });
+    }
+  });
 }
 
 // Función para ejecutar transacciones
 export async function executeTransaction(queries) {
-  const connection = await getPool().getConnection();
-  try {
-    await connection.beginTransaction();
-    
-    const results = [];
-    for (const { query, params } of queries) {
-      const [result] = await connection.execute(query, params);
-      results.push(result);
-    }
-    
-    await connection.commit();
-    return results;
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  const database = getDatabase();
+  
+  return new Promise((resolve, reject) => {
+    database.serialize(() => {
+      database.run('BEGIN TRANSACTION');
+      
+      const results = [];
+      let completed = 0;
+      let hasError = false;
+      
+      const processQuery = (queryObj, index) => {
+        const { query, params } = queryObj;
+        
+        if (query.trim().toUpperCase().startsWith('SELECT')) {
+          database.all(query, params, (err, rows) => {
+            if (err && !hasError) {
+              hasError = true;
+              database.run('ROLLBACK');
+              reject(err);
+            } else if (!hasError) {
+              results[index] = rows;
+              completed++;
+              if (completed === queries.length) {
+                database.run('COMMIT', (err) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    resolve(results);
+                  }
+                });
+              }
+            }
+          });
+        } else {
+          database.run(query, params, function(err) {
+            if (err && !hasError) {
+              hasError = true;
+              database.run('ROLLBACK');
+              reject(err);
+            } else if (!hasError) {
+              results[index] = {
+                insertId: this.lastID,
+                changes: this.changes
+              };
+              completed++;
+              if (completed === queries.length) {
+                database.run('COMMIT', (err) => {
+                  if (err) {
+                    reject(err);
+                  } else {
+                    resolve(results);
+                  }
+                });
+              }
+            }
+          });
+        }
+      };
+      
+      queries.forEach(processQuery);
+    });
+  });
 }
 
 // Función para inicializar la base de datos
 export async function initializeDatabase() {
   try {
-    // Crear conexión inicial sin especificar base de datos
-    const initialConnection = await mysql.createConnection({
-      host: dbConfig.host,
-      port: dbConfig.port,
-      user: dbConfig.user,
-      password: dbConfig.password,
-      charset: 'utf8mb4'
-    });
-
-    // Crear base de datos si no existe
-    await initialConnection.execute(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    await initialConnection.end();
-
-    // Crear pool de conexiones
-    createPool();
-
+    // Crear conexión SQLite
+    await createDatabase();
+    
     // Ejecutar migraciones
     await runMigrations();
     
-    console.log('✅ Base de datos inicializada correctamente');
+    console.log('✅ Base de datos SQLite inicializada correctamente');
   } catch (error) {
-    console.error('❌ Error inicializando base de datos:', error);
+    console.error('❌ Error inicializando base de datos SQLite:', error);
     throw error;
   }
 }
@@ -114,76 +158,153 @@ async function runMigrations() {
     // Crear tabla de migraciones si no existe
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS migrations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        filename VARCHAR(255) NOT NULL UNIQUE,
-        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT NOT NULL UNIQUE,
+        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
     `);
 
-    // Leer archivos de migración
-    const migrationsDir = path.join(__dirname, '../migrations');
+    // Crear las tablas principales si no existen
+    await createTables();
     
-    try {
-      const files = await fs.readdir(migrationsDir);
-      const migrationFiles = files
-        .filter(file => file.endsWith('.sql'))
-        .sort();
-
-      for (const file of migrationFiles) {
-        // Verificar si la migración ya fue ejecutada
-        const [existing] = await executeQuery(
-          'SELECT id FROM migrations WHERE filename = ?',
-          [file]
-        );
-
-        if (existing.length === 0) {
-          console.log(`📄 Ejecutando migración: ${file}`);
-          
-          // Leer y ejecutar migración
-          const migrationPath = path.join(migrationsDir, file);
-          const migrationSQL = await fs.readFile(migrationPath, 'utf8');
-          
-          // Dividir por declaraciones SQL (separadas por ;)
-          const statements = migrationSQL
-            .split(';')
-            .map(stmt => stmt.trim())
-            .filter(stmt => stmt.length > 0);
-
-          // Ejecutar cada declaración
-          for (const statement of statements) {
-            if (statement.trim()) {
-              await executeQuery(statement);
-            }
-          }
-
-          // Marcar migración como ejecutada
-          await executeQuery(
-            'INSERT INTO migrations (filename) VALUES (?)',
-            [file]
-          );
-
-          console.log(`✅ Migración ${file} ejecutada correctamente`);
-        }
-      }
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        console.log('📁 Directorio de migraciones no encontrado, creando...');
-        await fs.mkdir(migrationsDir, { recursive: true });
-      } else {
-        throw error;
-      }
-    }
-
+    console.log('✅ Migraciones ejecutadas correctamente');
   } catch (error) {
     console.error('❌ Error ejecutando migraciones:', error);
     throw error;
   }
 }
 
+// Función para crear las tablas principales
+async function createTables() {
+  try {
+    // Crear tabla de dispositivos
+    await executeQuery(`
+      CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY,
+        ip TEXT NOT NULL UNIQUE,
+        alias TEXT NOT NULL,
+        is_active INTEGER DEFAULT 0,
+        latest_ping REAL NULL,
+        avg_latency REAL DEFAULT 0,
+        min_latency REAL DEFAULT 0,
+        max_latency REAL DEFAULT 0,
+        availability REAL DEFAULT 100.00,
+        total_downs INTEGER DEFAULT 0,
+        failed_pings INTEGER DEFAULT 0,
+        total_pings INTEGER DEFAULT 0,
+        last_status_change DATETIME NULL,
+        downtime INTEGER DEFAULT 0,
+        uptime INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Crear tabla de historial de pings
+    await executeQuery(`
+      CREATE TABLE IF NOT EXISTS ping_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id TEXT NOT NULL,
+        timestamp DATETIME NOT NULL,
+        latency REAL NULL,
+        success INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Crear tabla de configuraciones
+    await executeQuery(`
+      CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_name TEXT NOT NULL UNIQUE,
+        value TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Crear tabla de alertas
+    await executeQuery(`
+      CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('down', 'recovery')),
+        message TEXT,
+        acknowledged INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Crear índices
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_alias ON devices(alias)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_is_active ON devices(is_active)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_ping_history_device_timestamp ON ping_history(device_id, timestamp)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_ping_history_timestamp ON ping_history(timestamp)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_alerts_device_id ON alerts(device_id)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(type)');
+    await executeQuery('CREATE INDEX IF NOT EXISTS idx_settings_key_name ON settings(key_name)');
+
+    // Insertar configuraciones por defecto
+    const defaultSettings = [
+      ['app_name', 'Monitor de Red'],
+      ['company_name', 'Mi Empresa'],
+      ['dashboard_subtitle', 'Monitoree sus dispositivos de red en tiempo real'],
+      ['logo_url', ''],
+      ['ping_interval', '5'],
+      ['theme', 'dark'],
+      ['primary_color', '#3B82F6'],
+      ['alerts_visual_enabled', 'true'],
+      ['alerts_visual_duration', '5'],
+      ['alerts_visual_style', 'fade'],
+      ['alerts_audio_enabled', 'true'],
+      ['alerts_audio_start_time', '08:30'],
+      ['alerts_audio_end_time', '17:30'],
+      ['alerts_audio_days', 'Monday,Tuesday,Wednesday,Thursday,Friday'],
+      ['alerts_email_enabled', 'false'],
+      ['alerts_email_recipients', ''],
+      ['alerts_telegram_enabled', 'false'],
+      ['alerts_telegram_recipients', '']
+    ];
+
+    for (const [key, value] of defaultSettings) {
+      try {
+        await executeQuery(
+          'INSERT OR IGNORE INTO settings (key_name, value) VALUES (?, ?)',
+          [key, value]
+        );
+      } catch (error) {
+        // Ignorar errores de duplicados
+        if (!error.message.includes('UNIQUE constraint failed')) {
+          throw error;
+        }
+      }
+    }
+
+    console.log('✅ Tablas creadas correctamente');
+  } catch (error) {
+    console.error('❌ Error creando tablas:', error);
+    throw error;
+  }
+}
+
 // Función para cerrar conexiones
 export async function closeDatabase() {
-  if (pool) {
-    await pool.end();
-    pool = null;
-  }
+  return new Promise((resolve) => {
+    if (db) {
+      db.close((err) => {
+        if (err) {
+          console.error('Error cerrando base de datos:', err);
+        } else {
+          console.log('✅ Base de datos cerrada correctamente');
+        }
+        db = null;
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
 }
