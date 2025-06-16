@@ -26,7 +26,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80; // Cambiar puerto por defecto a 80
 const HOST = process.env.HOST || '0.0.0.0'; // Escuchar en todas las interfaces
 
 // Configuración de seguridad
@@ -59,7 +59,7 @@ app.use(limiter);
 app.use(compression());
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.FRONTEND_URL, 'http://10.0.1.9', 'http://localhost:3000'].filter(Boolean)
+    ? [process.env.FRONTEND_URL, 'http://10.0.1.9', 'http://10.0.1.9:80', 'http://localhost:80'].filter(Boolean)
     : true,
   credentials: true
 }));
@@ -123,6 +123,9 @@ async function startServer() {
       console.log(`🌐 Aplicación disponible en:`);
       console.log(`   - Local: http://localhost:${PORT}`);
       console.log(`   - Red: http://10.0.1.9:${PORT}`);
+      if (PORT === 80) {
+        console.log(`   - URL Principal: http://10.0.1.9/`);
+      }
       console.log(`📊 API disponible en: http://10.0.1.9:${PORT}/api`);
       console.log(`🔍 Health check: http://10.0.1.9:${PORT}/api/health`);
     });
