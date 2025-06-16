@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
     
     if (acknowledged !== undefined) {
       query += ' WHERE a.acknowledged = ?';
-      params.push(acknowledged === 'true');
+      params.push(acknowledged === 'true' ? 1 : 0);
     }
     
     query += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
@@ -70,7 +70,7 @@ router.get('/recent', async (req, res) => {
         d.ip as device_ip
       FROM alerts a
       JOIN devices d ON a.device_id = d.id
-      WHERE a.created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+      WHERE a.created_at >= datetime('now', '-24 hours')
       ORDER BY a.created_at DESC
       LIMIT 50
     `);
@@ -101,11 +101,11 @@ router.put('/:id/acknowledge', async (req, res) => {
     const { id } = req.params;
 
     const result = await executeQuery(
-      'UPDATE alerts SET acknowledged = TRUE WHERE id = ?',
+      'UPDATE alerts SET acknowledged = 1 WHERE id = ?',
       [id]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.changes === 0) {
       return res.status(404).json({ error: 'Alerta no encontrada' });
     }
 
@@ -120,12 +120,12 @@ router.put('/:id/acknowledge', async (req, res) => {
 router.put('/acknowledge-all', async (req, res) => {
   try {
     const result = await executeQuery(
-      'UPDATE alerts SET acknowledged = TRUE WHERE acknowledged = FALSE'
+      'UPDATE alerts SET acknowledged = 1 WHERE acknowledged = 0'
     );
 
     res.json({ 
       message: 'Todas las alertas marcadas como reconocidas',
-      count: result.affectedRows
+      count: result.changes
     });
   } catch (error) {
     console.error('Error reconociendo todas las alertas:', error);
@@ -139,13 +139,13 @@ router.delete('/cleanup', async (req, res) => {
     const { days = 30 } = req.query;
 
     const result = await executeQuery(
-      'DELETE FROM alerts WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)',
+      'DELETE FROM alerts WHERE created_at < datetime("now", "-" || ? || " days")',
       [parseInt(days)]
     );
 
     res.json({ 
       message: `Alertas anteriores a ${days} días eliminadas`,
-      count: result.affectedRows
+      count: result.changes
     });
   } catch (error) {
     console.error('Error limpiando alertas:', error);
@@ -161,9 +161,9 @@ router.get('/stats', async (req, res) => {
         COUNT(*) as total_alerts,
         SUM(CASE WHEN type = 'down' THEN 1 ELSE 0 END) as down_alerts,
         SUM(CASE WHEN type = 'recovery' THEN 1 ELSE 0 END) as recovery_alerts,
-        SUM(CASE WHEN acknowledged = FALSE THEN 1 ELSE 0 END) as unacknowledged_alerts,
-        SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) THEN 1 ELSE 0 END) as alerts_24h,
-        SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as alerts_7d
+        SUM(CASE WHEN acknowledged = 0 THEN 1 ELSE 0 END) as unacknowledged_alerts,
+        SUM(CASE WHEN created_at >= datetime('now', '-24 hours') THEN 1 ELSE 0 END) as alerts_24h,
+        SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as alerts_7d
       FROM alerts
     `);
 

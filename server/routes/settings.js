@@ -89,11 +89,8 @@ router.put('/', async (req, res) => {
     // Actualizar cada configuración
     for (const update of updates) {
       await executeQuery(`
-        INSERT INTO settings (key_name, value) 
-        VALUES (?, ?) 
-        ON DUPLICATE KEY UPDATE 
-        value = VALUES(value), 
-        updated_at = CURRENT_TIMESTAMP
+        INSERT OR REPLACE INTO settings (key_name, value, updated_at) 
+        VALUES (?, ?, CURRENT_TIMESTAMP)
       `, [update.key, update.value]);
     }
 
@@ -132,11 +129,8 @@ router.put('/:key', async (req, res) => {
     const { value } = req.body;
 
     await executeQuery(`
-      INSERT INTO settings (key_name, value) 
-      VALUES (?, ?) 
-      ON DUPLICATE KEY UPDATE 
-      value = VALUES(value), 
-      updated_at = CURRENT_TIMESTAMP
+      INSERT OR REPLACE INTO settings (key_name, value, updated_at) 
+      VALUES (?, ?, CURRENT_TIMESTAMP)
     `, [key, value]);
 
     res.json({ message: 'Configuración actualizada correctamente' });

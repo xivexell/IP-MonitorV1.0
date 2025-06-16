@@ -47,20 +47,20 @@ router.get('/devices', async (req, res) => {
 
     // Filtrar por estado
     if (status === 'active') {
-      conditions.push('d.is_active = TRUE');
+      conditions.push('d.is_active = 1');
     } else if (status === 'down') {
-      conditions.push('d.is_active = FALSE');
+      conditions.push('d.is_active = 0');
     }
 
     // Filtrar por fecha de creación
     if (startDate) {
       conditions.push('d.created_at >= ?');
-      params.push(new Date(startDate));
+      params.push(new Date(startDate).toISOString());
     }
 
     if (endDate) {
       conditions.push('d.created_at <= ?');
-      params.push(new Date(endDate));
+      params.push(new Date(endDate).toISOString());
     }
 
     if (conditions.length > 0) {
@@ -156,12 +156,12 @@ router.get('/ping-history', async (req, res) => {
 
     if (startDate) {
       conditions.push('ph.timestamp >= ?');
-      params.push(new Date(startDate));
+      params.push(new Date(startDate).toISOString());
     }
 
     if (endDate) {
       conditions.push('ph.timestamp <= ?');
-      params.push(new Date(endDate));
+      params.push(new Date(endDate).toISOString());
     }
 
     if (conditions.length > 0) {
@@ -243,17 +243,17 @@ router.get('/alerts', async (req, res) => {
 
     if (acknowledged !== undefined) {
       conditions.push('a.acknowledged = ?');
-      params.push(acknowledged === 'true');
+      params.push(acknowledged === 'true' ? 1 : 0);
     }
 
     if (startDate) {
       conditions.push('a.created_at >= ?');
-      params.push(new Date(startDate));
+      params.push(new Date(startDate).toISOString());
     }
 
     if (endDate) {
       conditions.push('a.created_at <= ?');
-      params.push(new Date(endDate));
+      params.push(new Date(endDate).toISOString());
     }
 
     if (conditions.length > 0) {

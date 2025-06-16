@@ -84,14 +84,14 @@ async function pingAllDevices() {
 // Función para actualizar resultado de ping en la base de datos
 async function updateDevicePingResult(device, pingResult) {
   try {
-    const pingTimestamp = new Date();
+    const pingTimestamp = new Date().toISOString();
     const wasActive = Boolean(device.is_active);
 
     // Insertar resultado de ping en el historial
     await executeQuery(`
       INSERT INTO ping_history (device_id, timestamp, latency, success)
       VALUES (?, ?, ?, ?)
-    `, [device.id, pingTimestamp, pingResult.success ? pingResult.latency : null, pingResult.success]);
+    `, [device.id, pingTimestamp, pingResult.success ? pingResult.latency : null, pingResult.success ? 1 : 0]);
 
     // Obtener estadísticas actuales del dispositivo
     const [currentDevice] = await executeQuery(
@@ -124,7 +124,7 @@ async function updateDevicePingResult(device, pingResult) {
     let newTotalDowns = currentDevice.total_downs;
 
     if (currentDevice.last_status_change) {
-      const elapsedSeconds = (pingTimestamp.getTime() - new Date(currentDevice.last_status_change).getTime()) / 1000;
+      const elapsedSeconds = (new Date(pingTimestamp).getTime() - new Date(currentDevice.last_status_change).getTime()) / 1000;
       if (wasActive) {
         newUptime += elapsedSeconds;
       } else {
@@ -157,7 +157,7 @@ async function updateDevicePingResult(device, pingResult) {
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `, [
-      pingResult.success,
+      pingResult.success ? 1 : 0,
       pingResult.success ? pingResult.latency : null,
       newAvgLatency,
       newMinLatency,

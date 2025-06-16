@@ -42,17 +42,7 @@ router.post('/all', async (req, res) => {
         const pingResult = await simulatePing(device.ip);
         
         // Actualizar resultado en la base de datos
-        await fetch(`http://localhost:${process.env.PORT || 3000}/api/devices/${device.id}/ping`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            success: pingResult.success,
-            latency: pingResult.latency,
-            timestamp: new Date().toISOString()
-          })
-        });
+        await updateDevicePingResult(device, pingResult);
 
         return {
           deviceId: device.id,
@@ -85,13 +75,13 @@ router.get('/stats', async (req, res) => {
     let query = `
       SELECT 
         COUNT(*) as total_pings,
-        SUM(CASE WHEN success = TRUE THEN 1 ELSE 0 END) as successful_pings,
-        SUM(CASE WHEN success = FALSE THEN 1 ELSE 0 END) as failed_pings,
-        AVG(CASE WHEN success = TRUE THEN latency ELSE NULL END) as avg_latency,
-        MIN(CASE WHEN success = TRUE THEN latency ELSE NULL END) as min_latency,
-        MAX(CASE WHEN success = TRUE THEN latency ELSE NULL END) as max_latency
+        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_pings,
+        SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed_pings,
+        AVG(CASE WHEN success = 1 THEN latency ELSE NULL END) as avg_latency,
+        MIN(CASE WHEN success = 1 THEN latency ELSE NULL END) as min_latency,
+        MAX(CASE WHEN success = 1 THEN latency ELSE NULL END) as max_latency
       FROM ping_history 
-      WHERE timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+      WHERE timestamp >= datetime('now', '-' || ? || ' hours')
     `;
 
     const params = [parseInt(hours)];
@@ -152,6 +142,90 @@ function getBaseLatencyForIP(ip) {
   
   // Generar latencia base entre 5ms y 150ms
   return 5 + (hash % 145);
+}
+
+// Función para actualizar resultado de ping
+async function updateDevicePingResult(device, pingResult) {
+  try {
+    const pingTimestamp = new Date().toISOString();
+    
+    // Insertar resultado de ping en el historial
+    await executeQuery(`
+      INSERT INTO ping_history (device_id, timestamp, latency, success)
+      VALUES (?, ?, ?, ?)
+    `, [device.id, pingTimestamp, pingResult.success ? pingResult.latency : null, pingResult.success ? 1 : 0]);
+
+    // Obtener estadísticas actuales del dispositivo
+    const [currentDevice] = await executeQuery(
+      'SELECT * FROM devices WHERE id = ?',
+      [device.id]
+    );
+
+    if (!currentDevice) return;
+
+    const wasActive = Boolean(currentDevice.is_active);
+    const newTotalPings = currentDevice.total_pings + 1;
+    const newFailedPings = pingResult.success ? currentDevice.failed_pings : currentDevice.failed_pings + 1;
+    const newAvailability = ((newTotalPings - newFailedPings) / newTotalPings) * 100;
+
+    let newMinLatency = currentDevice.min_latency;
+    let newMaxLatency = currentDevice.max_latency;
+    let newAvgLatency = currentDevice.avg_latency;
+
+    if (pingResult.success && pingResult.latency !== null) {
+      newMinLatency = currentDevice.min_latency === 0 ? pingResult.latency : Math.min(currentDevice.min_latency, pingResult.latency);
+      newMaxLatency = Math.max(currentDevice.max_latency, pingResult.latency);
+      
+      const totalSuccessfulPings = newTotalPings - newFailedPings;
+      newAvgLatency = ((currentDevice.avg_latency * (totalSuccessfulPings - 1)) + pingResult.latency) / totalSuccessfulPings;
+    }
+
+    const statusChanged = wasActive !== pingResult.success;
+
+    // Actualizar dispositivo
+    await executeQuery(`
+      UPDATE devices SET
+        is_active = ?,
+        latest_ping = ?,
+        avg_latency = ?,
+        min_latency = ?,
+        max_latency = ?,
+        availability = ?,
+        failed_pings = ?,
+        total_pings = ?,
+        last_status_change = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      pingResult.success ? 1 : 0,
+      pingResult.success ? pingResult.latency : null,
+      newAvgLatency,
+      newMinLatency,
+      newMaxLatency,
+      newAvailability,
+      newFailedPings,
+      newTotalPings,
+      statusChanged ? pingTimestamp : currentDevice.last_status_change,
+      device.id
+    ]);
+
+    // Si hay cambio de estado, crear alerta
+    if (statusChanged) {
+      await executeQuery(`
+        INSERT INTO alerts (device_id, type, message)
+        VALUES (?, ?, ?)
+      `, [
+        device.id,
+        pingResult.success ? 'recovery' : 'down',
+        `Dispositivo ${device.alias} (${device.ip}) ${pingResult.success ? 'recuperado' : 'caído'}`
+      ]);
+    }
+
+    return statusChanged;
+  } catch (error) {
+    console.error(`Error actualizando resultado de ping para ${device.alias}:`, error);
+    throw error;
+  }
 }
 
 export default router;
