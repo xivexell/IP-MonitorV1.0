@@ -1,153 +1,151 @@
-import sqlite3 from 'sqlite3';
+import mysql from 'mysql2/promise';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+// Cargar variables de entorno
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Configuración de la base de datos SQLite
-const dbPath = path.join(process.cwd(), 'data', 'network_monitor.db');
+// Configuración de la base de datos MariaDB/MySQL
+const dbConfig = {
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT) || 3306,
+  user: process.env.DB_USER || 'network_monitor',
+  password: process.env.DB_PASSWORD || 'secure_password_2024',
+  database: process.env.DB_NAME || 'network_monitor_db',
+  charset: 'utf8mb4',
+  timezone: '+00:00',
+  acquireTimeout: 60000,
+  timeout: 60000,
+  reconnect: true
+};
 
-let db;
+let pool;
 
-// Función para crear la conexión SQLite
+// Función para crear el pool de conexiones
 export function createDatabase() {
   return new Promise((resolve, reject) => {
-    // Crear directorio data si no existe
-    const dataDir = path.dirname(dbPath);
-    fs.mkdir(dataDir, { recursive: true }).then(() => {
-      db = new sqlite3.Database(dbPath, (err) => {
-        if (err) {
-          console.error('❌ Error conectando a SQLite:', err);
-          reject(err);
-        } else {
-          console.log('✅ Conectado a SQLite database');
-          // Habilitar foreign keys
-          db.run('PRAGMA foreign_keys = ON');
-          resolve(db);
-        }
+    try {
+      pool = mysql.createPool({
+        ...dbConfig,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        acquireTimeout: 60000,
+        timeout: 60000,
+        reconnect: true
       });
-    }).catch(reject);
+
+      console.log('✅ Pool de conexiones MariaDB creado');
+      resolve(pool);
+    } catch (error) {
+      console.error('❌ Error creando pool de conexiones MariaDB:', error);
+      reject(error);
+    }
   });
 }
 
 export function getDatabase() {
-  if (!db) {
-    throw new Error('Database not initialized. Call createDatabase() first.');
+  if (!pool) {
+    throw new Error('Database pool not initialized. Call createDatabase() first.');
   }
-  return db;
+  return pool;
 }
 
 // Función para ejecutar consultas
 export async function executeQuery(query, params = []) {
-  return new Promise((resolve, reject) => {
+  try {
     const database = getDatabase();
+    const [rows] = await database.execute(query, params);
     
-    if (query.trim().toUpperCase().startsWith('SELECT')) {
-      database.all(query, params, (err, rows) => {
-        if (err) {
-          console.error('Error ejecutando consulta SELECT:', err);
-          reject(err);
-        } else {
-          resolve(rows);
-        }
-      });
-    } else {
-      database.run(query, params, function(err) {
-        if (err) {
-          console.error('Error ejecutando consulta:', err);
-          reject(err);
-        } else {
-          resolve({
-            insertId: this.lastID,
-            changes: this.changes
-          });
-        }
-      });
+    // Para consultas INSERT, UPDATE, DELETE, devolver información de cambios
+    if (query.trim().toUpperCase().startsWith('INSERT') || 
+        query.trim().toUpperCase().startsWith('UPDATE') || 
+        query.trim().toUpperCase().startsWith('DELETE')) {
+      return {
+        insertId: rows.insertId || null,
+        affectedRows: rows.affectedRows || 0,
+        changes: rows.affectedRows || 0
+      };
     }
-  });
+    
+    return rows;
+  } catch (error) {
+    console.error('Error ejecutando consulta:', error);
+    console.error('Query:', query);
+    console.error('Params:', params);
+    throw error;
+  }
 }
 
 // Función para ejecutar transacciones
 export async function executeTransaction(queries) {
   const database = getDatabase();
+  const connection = await database.getConnection();
   
-  return new Promise((resolve, reject) => {
-    database.serialize(() => {
-      database.run('BEGIN TRANSACTION');
+  try {
+    await connection.beginTransaction();
+    
+    const results = [];
+    for (const queryObj of queries) {
+      const { query, params } = queryObj;
+      const [rows] = await connection.execute(query, params);
       
-      const results = [];
-      let completed = 0;
-      let hasError = false;
-      
-      const processQuery = (queryObj, index) => {
-        const { query, params } = queryObj;
-        
-        if (query.trim().toUpperCase().startsWith('SELECT')) {
-          database.all(query, params, (err, rows) => {
-            if (err && !hasError) {
-              hasError = true;
-              database.run('ROLLBACK');
-              reject(err);
-            } else if (!hasError) {
-              results[index] = rows;
-              completed++;
-              if (completed === queries.length) {
-                database.run('COMMIT', (err) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    resolve(results);
-                  }
-                });
-              }
-            }
-          });
-        } else {
-          database.run(query, params, function(err) {
-            if (err && !hasError) {
-              hasError = true;
-              database.run('ROLLBACK');
-              reject(err);
-            } else if (!hasError) {
-              results[index] = {
-                insertId: this.lastID,
-                changes: this.changes
-              };
-              completed++;
-              if (completed === queries.length) {
-                database.run('COMMIT', (err) => {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    resolve(results);
-                  }
-                });
-              }
-            }
-          });
-        }
-      };
-      
-      queries.forEach(processQuery);
-    });
-  });
+      if (query.trim().toUpperCase().startsWith('INSERT') || 
+          query.trim().toUpperCase().startsWith('UPDATE') || 
+          query.trim().toUpperCase().startsWith('DELETE')) {
+        results.push({
+          insertId: rows.insertId || null,
+          affectedRows: rows.affectedRows || 0,
+          changes: rows.affectedRows || 0
+        });
+      } else {
+        results.push(rows);
+      }
+    }
+    
+    await connection.commit();
+    return results;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 // Función para inicializar la base de datos
 export async function initializeDatabase() {
   try {
-    // Crear conexión SQLite
+    // Crear pool de conexiones
     await createDatabase();
+    
+    // Probar conexión
+    await testConnection();
     
     // Ejecutar migraciones
     await runMigrations();
     
-    console.log('✅ Base de datos SQLite inicializada correctamente');
+    console.log('✅ Base de datos MariaDB inicializada correctamente');
   } catch (error) {
-    console.error('❌ Error inicializando base de datos SQLite:', error);
+    console.error('❌ Error inicializando base de datos MariaDB:', error);
+    throw error;
+  }
+}
+
+// Función para probar la conexión
+async function testConnection() {
+  try {
+    const database = getDatabase();
+    const [rows] = await database.execute('SELECT 1 as test');
+    console.log('✅ Conexión a MariaDB establecida correctamente');
+  } catch (error) {
+    console.error('❌ Error conectando a MariaDB:', error);
     throw error;
   }
 }
@@ -158,10 +156,10 @@ async function runMigrations() {
     // Crear tabla de migraciones si no existe
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS migrations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        filename TEXT NOT NULL UNIQUE,
-        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        filename VARCHAR(255) NOT NULL UNIQUE,
+        executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
     // Crear las tablas principales si no existen
@@ -180,72 +178,78 @@ async function createTables() {
     // Crear tabla de dispositivos
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS devices (
-        id TEXT PRIMARY KEY,
-        ip TEXT NOT NULL UNIQUE,
-        alias TEXT NOT NULL,
-        is_active INTEGER DEFAULT 0,
-        latest_ping REAL NULL,
-        avg_latency REAL DEFAULT 0,
-        min_latency REAL DEFAULT 0,
-        max_latency REAL DEFAULT 0,
-        availability REAL DEFAULT 100.00,
-        total_downs INTEGER DEFAULT 0,
-        failed_pings INTEGER DEFAULT 0,
-        total_pings INTEGER DEFAULT 0,
+        id VARCHAR(36) PRIMARY KEY,
+        ip VARCHAR(45) NOT NULL UNIQUE,
+        alias VARCHAR(255) NOT NULL,
+        is_active BOOLEAN DEFAULT FALSE,
+        latest_ping DECIMAL(10,3) NULL,
+        avg_latency DECIMAL(10,3) DEFAULT 0,
+        min_latency DECIMAL(10,3) DEFAULT 0,
+        max_latency DECIMAL(10,3) DEFAULT 0,
+        availability DECIMAL(5,2) DEFAULT 100.00,
+        total_downs INT DEFAULT 0,
+        failed_pings INT DEFAULT 0,
+        total_pings INT DEFAULT 0,
         last_status_change DATETIME NULL,
-        downtime INTEGER DEFAULT 0,
-        uptime INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
+        downtime INT DEFAULT 0,
+        uptime INT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        
+        INDEX idx_ip (ip),
+        INDEX idx_alias (alias),
+        INDEX idx_is_active (is_active),
+        INDEX idx_created_at (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
     // Crear tabla de historial de pings
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS ping_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT NOT NULL,
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        device_id VARCHAR(36) NOT NULL,
         timestamp DATETIME NOT NULL,
-        latency REAL NULL,
-        success INTEGER NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
-      )
+        latency DECIMAL(10,3) NULL,
+        success BOOLEAN NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        
+        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+        INDEX idx_device_timestamp (device_id, timestamp),
+        INDEX idx_timestamp (timestamp),
+        INDEX idx_success (success)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
     // Crear tabla de configuraciones
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS settings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key_name TEXT NOT NULL UNIQUE,
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        key_name VARCHAR(100) NOT NULL UNIQUE,
         value TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        
+        INDEX idx_key_name (key_name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
     // Crear tabla de alertas
     await executeQuery(`
       CREATE TABLE IF NOT EXISTS alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        device_id TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (type IN ('down', 'recovery')),
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        device_id VARCHAR(36) NOT NULL,
+        type ENUM('down', 'recovery') NOT NULL,
         message TEXT,
-        acknowledged INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
-      )
+        acknowledged BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        
+        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+        INDEX idx_device_id (device_id),
+        INDEX idx_type (type),
+        INDEX idx_created_at (created_at),
+        INDEX idx_acknowledged (acknowledged)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
-
-    // Crear índices
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_alias ON devices(alias)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_devices_is_active ON devices(is_active)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_ping_history_device_timestamp ON ping_history(device_id, timestamp)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_ping_history_timestamp ON ping_history(timestamp)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_alerts_device_id ON alerts(device_id)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(type)');
-    await executeQuery('CREATE INDEX IF NOT EXISTS idx_settings_key_name ON settings(key_name)');
 
     // Insertar configuraciones por defecto
     const defaultSettings = [
@@ -272,18 +276,18 @@ async function createTables() {
     for (const [key, value] of defaultSettings) {
       try {
         await executeQuery(
-          'INSERT OR IGNORE INTO settings (key_name, value) VALUES (?, ?)',
+          'INSERT IGNORE INTO settings (key_name, value) VALUES (?, ?)',
           [key, value]
         );
       } catch (error) {
         // Ignorar errores de duplicados
-        if (!error.message.includes('UNIQUE constraint failed')) {
+        if (!error.message.includes('Duplicate entry')) {
           throw error;
         }
       }
     }
 
-    console.log('✅ Tablas creadas correctamente');
+    console.log('✅ Tablas creadas correctamente en MariaDB');
   } catch (error) {
     console.error('❌ Error creando tablas:', error);
     throw error;
@@ -292,19 +296,13 @@ async function createTables() {
 
 // Función para cerrar conexiones
 export async function closeDatabase() {
-  return new Promise((resolve) => {
-    if (db) {
-      db.close((err) => {
-        if (err) {
-          console.error('Error cerrando base de datos:', err);
-        } else {
-          console.log('✅ Base de datos cerrada correctamente');
-        }
-        db = null;
-        resolve();
-      });
-    } else {
-      resolve();
+  try {
+    if (pool) {
+      await pool.end();
+      pool = null;
+      console.log('✅ Pool de conexiones MariaDB cerrado correctamente');
     }
-  });
+  } catch (error) {
+    console.error('Error cerrando pool de conexiones:', error);
+  }
 }

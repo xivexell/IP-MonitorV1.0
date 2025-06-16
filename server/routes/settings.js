@@ -89,8 +89,11 @@ router.put('/', async (req, res) => {
     // Actualizar cada configuración
     for (const update of updates) {
       await executeQuery(`
-        INSERT OR REPLACE INTO settings (key_name, value, updated_at) 
+        INSERT INTO settings (key_name, value, updated_at) 
         VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE 
+        value = VALUES(value), 
+        updated_at = CURRENT_TIMESTAMP
       `, [update.key, update.value]);
     }
 
@@ -106,16 +109,16 @@ router.get('/:key', async (req, res) => {
   try {
     const { key } = req.params;
     
-    const [setting] = await executeQuery(
+    const settings = await executeQuery(
       'SELECT value FROM settings WHERE key_name = ?',
       [key]
     );
 
-    if (!setting) {
+    if (settings.length === 0) {
       return res.status(404).json({ error: 'Configuración no encontrada' });
     }
 
-    res.json({ key, value: setting.value });
+    res.json({ key, value: settings[0].value });
   } catch (error) {
     console.error('Error obteniendo configuración:', error);
     res.status(500).json({ error: 'Error obteniendo configuración' });
@@ -129,8 +132,11 @@ router.put('/:key', async (req, res) => {
     const { value } = req.body;
 
     await executeQuery(`
-      INSERT OR REPLACE INTO settings (key_name, value, updated_at) 
+      INSERT INTO settings (key_name, value, updated_at) 
       VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON DUPLICATE KEY UPDATE 
+      value = VALUES(value), 
+      updated_at = CURRENT_TIMESTAMP
     `, [key, value]);
 
     res.json({ message: 'Configuración actualizada correctamente' });

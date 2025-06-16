@@ -69,13 +69,15 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const [device] = await executeQuery(`
+    const devices = await executeQuery(`
       SELECT * FROM devices WHERE id = ?
     `, [id]);
 
-    if (!device) {
+    if (devices.length === 0) {
       return res.status(404).json({ error: 'Dispositivo no encontrado' });
     }
+
+    const device = devices[0];
 
     // Obtener historial completo
     const history = await executeQuery(`
@@ -120,12 +122,12 @@ router.post('/', async (req, res) => {
     }
 
     // Verificar que la IP no esté duplicada
-    const [existing] = await executeQuery(
+    const existing = await executeQuery(
       'SELECT id FROM devices WHERE ip = ?',
       [ip]
     );
 
-    if (existing) {
+    if (existing.length > 0) {
       return res.status(400).json({ error: 'Ya existe un dispositivo con esta IP' });
     }
 
@@ -144,10 +146,12 @@ router.post('/', async (req, res) => {
     ]);
 
     // Obtener el dispositivo creado
-    const [newDevice] = await executeQuery(
+    const newDevices = await executeQuery(
       'SELECT * FROM devices WHERE id = ?',
       [deviceId]
     );
+
+    const newDevice = newDevices[0];
 
     res.status(201).json({
       ...newDevice,
@@ -185,22 +189,22 @@ router.put('/:id', async (req, res) => {
     }
 
     // Verificar que el dispositivo existe
-    const [existing] = await executeQuery(
+    const existing = await executeQuery(
       'SELECT id FROM devices WHERE id = ?',
       [id]
     );
 
-    if (!existing) {
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Dispositivo no encontrado' });
     }
 
     // Verificar que la IP no esté duplicada (excepto el mismo dispositivo)
-    const [duplicate] = await executeQuery(
+    const duplicate = await executeQuery(
       'SELECT id FROM devices WHERE ip = ? AND id != ?',
       [ip, id]
     );
 
-    if (duplicate) {
+    if (duplicate.length > 0) {
       return res.status(400).json({ error: 'Ya existe otro dispositivo con esta IP' });
     }
 
@@ -211,10 +215,12 @@ router.put('/:id', async (req, res) => {
     `, [ip, alias, id]);
 
     // Obtener el dispositivo actualizado
-    const [updatedDevice] = await executeQuery(
+    const updatedDevices = await executeQuery(
       'SELECT * FROM devices WHERE id = ?',
       [id]
     );
+
+    const updatedDevice = updatedDevices[0];
 
     res.json({
       ...updatedDevice,
@@ -240,12 +246,12 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
 
     // Verificar que el dispositivo existe
-    const [existing] = await executeQuery(
+    const existing = await executeQuery(
       'SELECT id FROM devices WHERE id = ?',
       [id]
     );
 
-    if (!existing) {
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Dispositivo no encontrado' });
     }
 
@@ -266,15 +272,16 @@ router.post('/:id/ping', async (req, res) => {
     const { success, latency, timestamp } = req.body;
 
     // Verificar que el dispositivo existe
-    const [device] = await executeQuery(
+    const devices = await executeQuery(
       'SELECT * FROM devices WHERE id = ?',
       [id]
     );
 
-    if (!device) {
+    if (devices.length === 0) {
       return res.status(404).json({ error: 'Dispositivo no encontrado' });
     }
 
+    const device = devices[0];
     const pingTimestamp = timestamp ? new Date(timestamp) : new Date();
     const wasActive = Boolean(device.is_active);
 

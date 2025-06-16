@@ -26,8 +26,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Puerto por defecto 3000
-const HOST = process.env.HOST || '0.0.0.0'; // Escuchar en todas las interfaces
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '10.0.1.9'; // Configurado para 10.0.1.9
 
 // Configuración de seguridad
 app.use(helmet({
@@ -85,7 +85,8 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     version: '1.0.0',
     host: HOST,
-    port: PORT
+    port: PORT,
+    database: 'MariaDB'
   });
 });
 
@@ -113,18 +114,19 @@ app.use('*', (req, res) => {
 // Inicializar servidor
 async function startServer() {
   try {
-    // Inicializar base de datos
+    // Inicializar base de datos MariaDB
     await initializeDatabase();
-    console.log('✅ Base de datos inicializada correctamente');
+    console.log('✅ Base de datos MariaDB inicializada correctamente');
 
     // Iniciar servidor
     app.listen(PORT, HOST, () => {
       console.log(`🚀 Servidor ejecutándose en ${HOST}:${PORT}`);
       console.log(`🌐 Aplicación disponible en:`);
+      console.log(`   - Red: http://${HOST}:${PORT}`);
       console.log(`   - Local: http://localhost:${PORT}`);
-      console.log(`   - Red: http://10.0.1.9:${PORT}`);
-      console.log(`📊 API disponible en: http://10.0.1.9:${PORT}/api`);
-      console.log(`🔍 Health check: http://10.0.1.9:${PORT}/api/health`);
+      console.log(`📊 API disponible en: http://${HOST}:${PORT}/api`);
+      console.log(`🔍 Health check: http://${HOST}:${PORT}/api/health`);
+      console.log(`💾 Base de datos: MariaDB`);
     });
 
     // Iniciar servicio de ping automático
