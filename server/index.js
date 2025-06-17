@@ -27,7 +27,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '10.0.1.9'; // Configurado para 10.0.1.9
+const HOST = process.env.HOST || '0.0.0.0'; // Cambiado para escuchar en todas las interfaces
 
 // Configuración de seguridad
 app.use(helmet({
@@ -122,10 +122,10 @@ async function startServer() {
     app.listen(PORT, HOST, () => {
       console.log(`🚀 Servidor ejecutándose en ${HOST}:${PORT}`);
       console.log(`🌐 Aplicación disponible en:`);
-      console.log(`   - Red: http://${HOST}:${PORT}`);
+      console.log(`   - Red: http://10.0.1.9:${PORT}`);
       console.log(`   - Local: http://localhost:${PORT}`);
-      console.log(`📊 API disponible en: http://${HOST}:${PORT}/api`);
-      console.log(`🔍 Health check: http://${HOST}:${PORT}/api/health`);
+      console.log(`📊 API disponible en: http://localhost:${PORT}/api`);
+      console.log(`🔍 Health check: http://localhost:${PORT}/api/health`);
       console.log(`💾 Base de datos: MariaDB`);
     });
 
